@@ -1,0 +1,115 @@
+@page "/modelos"
+@rendermode InteractiveServer
+@inject ModeloGgufService ModeloService
+
+<PageTitle>Modelos Ollama</PageTitle>
+
+<h3>Gestión de Modelos en Ollama</h3>
+
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card p-3 h-100">
+            <h5>Descargar Modelo desde Ollama</h5>
+            <p class="small text-muted">Ejemplo: <code>qwen3:8b</code>, <code>bge-m3</code>, <code>llama3.1</code></p>
+            <div class="input-group mb-2">
+                <input class="form-control" @bind="modeloDescargar" placeholder="Nombre del modelo..." />
+                <button class="btn btn-primary" @onclick="Descargar" disabled="@ocupado">Descargar</button>
+            </div>
+            @if (progresoDescarga > 0)
+            {
+                <div class="progress mt-2">
+                    <div class="progress-bar" style="width: @($"{progresoDescarga:F0}%")">@($"{progresoDescarga:F1}%")</div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="col-md-6 mb-4">
+        <div class="card p-3 h-100">
+            <h5>Importar Modelo Personalizado (.gguf)</h5>
+            <div class="mb-2">
+                <input class="form-control" @bind="nombreNuevoModelo" placeholder="Nombre destino (ej. mi-modelo)" />
+            </div>
+            <div class="mb-2">
+                <textarea class="form-control" @bind="systemPrompt" rows="2" placeholder="System Prompt..."></textarea>
+            </div>
+            <div class="mb-2">
+                <InputFile OnChange="SeleccionarGguf" accept=".gguf" class="form-control" />
+            </div>
+            <button class="btn btn-success" @onclick="ImportarGguf" disabled="@ocupado">Importar GGUF</button>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(mensajeEstado))
+{
+    <div class="alert alert-info">@mensajeEstado</div>
+}
+
+<h5>Modelos Instalados Localmente:</h5>
+<ul class="list-group">
+    @foreach (var m in modelosLocales)
+    {
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+            <span>@m</span>
+            <span class="badge bg-success">Listo</span>
+        </li>
+    }
+</ul>
+
+@code {
+    private List<string> modelosLocales = [];
+    private string modeloDescargar = "";
+    private double progresoDescarga = 0;
+    private string nombreNuevoModelo = "asistente-corporativo";
+    private string systemPrompt = "Eres un asistente experto en nuestros documentos internos.";
+    private IBrowserFile? archivoGguf;
+    private string mensajeEstado = "";
+    private bool ocupado = false;
+
+    protected override async Task OnInitializedAsync() => await Refrescar();
+
+    private async Task Refrescar()
+    {
+        try
+        {
+            modelosLocales = await ModeloService.ObtenerModelosLocalesAsync();
+        }
+        catch (Exception ex)
+        {
+            mensajeEstado = $"Error conectando con Ollama: {ex.Message}";
+        }
+    }
+
+    private async Task Descargar()
+    {
+        if (string.IsNullOrWhiteSpace(modeloDescargar)) return;
+        ocupado = true;
+        mensajeEstado = $"Descargando '{modeloDescargar}'...";
+        await foreach (var pct in ModeloService.DescargarModeloAsync(modeloDescargar))
+        {
+            progresoDescarga = pct;
+            await InvokeAsync(StateHasChanged);
+        }
+        mensajeEstado = $"Modelo '{modeloDescargar}' descargado.";
+        progresoDescarga = 0;
+        await Refrescar();
+        ocupado = false;
+    }
+
+    private void SeleccionarGguf(InputFileChangeEventArgs e) => archivoGguf = e.File;
+
+    private async Task ImportarGguf()
+    {
+        if (archivoGguf is null || string.IsNullOrWhiteSpace(nombreNuevoModelo)) return;
+        ocupado = true;
+        await using var stream = archivoGguf.OpenReadStream(maxAllowedSize: 12L * 1024 * 1024 * 1024);
+        await foreach (var st in ModeloService.ImportarGgufAsync(stream, archivoGguf.Name, nombreNuevoModelo, systemPrompt))
+        {
+            mensajeEstado = st;
+            await InvokeAsync(StateHasChanged);
+        }
+        await Refrescar();
+        ocupado = false;
+    }
+}

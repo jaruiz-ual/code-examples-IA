@@ -1,0 +1,102 @@
+@page "/documentos"
+@rendermode InteractiveServer
+@inject DocumentIngestionService DocService
+
+<PageTitle>Documentos RAG</PageTitle>
+
+<h3>Base de Conocimiento Documental (SQL Server LocalDB)</h3>
+<p class="text-muted">Sube manuales o documentos estructurados (.docx, .pdf, .txt, .md) para vectorizarlos.</p>
+
+<div class="card p-3 mb-4">
+    <label class="form-label fw-bold">Seleccionar archivos:</label>
+    <InputFile OnChange="SubirArchivos" multiple accept=".pdf,.docx,.txt,.md"
+               class="form-control" disabled="@procesando" />
+
+    @if (!string.IsNullOrEmpty(estado))
+    {
+        <div class="alert alert-info mt-3 mb-0">@estado</div>
+    }
+</div>
+
+<table class="table table-striped table-hover">
+    <thead class="table-dark">
+        <tr>
+            <th>Documento</th>
+            <th>Fragmentos Vectorizados</th>
+            <th>Fecha Indexación</th>
+            <th>Acciones</th>
+        </tr>
+    </thead>
+    <tbody>
+        @if (documentos.Count == 0)
+        {
+            <tr>
+                <td colspan="4" class="text-center text-muted py-3">Aún no hay documentos indexados en SQL Server LocalDB.</td>
+            </tr>
+        }
+        @foreach (var doc in documentos)
+        {
+            <tr>
+                <td>@doc.NombreArchivo</td>
+                <td>@doc.Fragmentos bloques</td>
+                <td>@doc.Fecha.ToLocalTime().ToString("g")</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-danger"
+                            @onclick="() => Eliminar(doc.NombreArchivo)">Eliminar</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<(string NombreArchivo, int Fragmentos, DateTime Fecha)> documentos = [];
+    private string estado = "";
+    private bool procesando = false;
+
+    protected override async Task OnInitializedAsync() => await CargarLista();
+
+    private async Task CargarLista()
+    {
+        try
+        {
+            documentos = await DocService.ListarDocumentosAsync();
+        }
+        catch (Exception ex)
+        {
+            estado = $"Error al conectar con SQL Server LocalDB: {ex.Message}";
+        }
+    }
+
+    private async Task SubirArchivos(InputFileChangeEventArgs e)
+    {
+        procesando = true;
+        try
+        {
+            foreach (var file in e.GetMultipleFiles(10))
+            {
+                estado = $"Extrayendo estructura y vectorizando '{file.Name}'...";
+                await InvokeAsync(StateHasChanged);
+
+                await using var stream = file.OpenReadStream(maxAllowedSize: 30_000_000);
+                await DocService.IndexarDocumentoAsync(file.Name, stream);
+            }
+            estado = "Indexación completada correctamente en SQL Server LocalDB.";
+            await CargarLista();
+        }
+        catch (Exception ex)
+        {
+            estado = $"Error al procesar documento: {ex.Message}";
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private async Task Eliminar(string nombre)
+    {
+        await DocService.EliminarDocumentoAsync(nombre);
+        await CargarLista();
+    }
+}

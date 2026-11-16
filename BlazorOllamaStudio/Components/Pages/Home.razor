@@ -1,0 +1,140 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject RagSql2019Service RagService
+@inject ModeloGgufService ModeloService
+
+<PageTitle>Asistente Documental IA</PageTitle>
+
+<h3>Asistente Documental IA Local</h3>
+<p class="text-muted">Consulta tus documentos indexados en SQL Server LocalDB con respuestas en tiempo real.</p>
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <label class="form-label fw-semibold">Modelo activo:</label>
+        <select class="form-select" @bind="modeloSeleccionado">
+            @foreach (var m in modelos)
+            {
+                <option value="@m">@m</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-5">
+        <label class="form-label fw-semibold">Adjuntar imagen (opcional para Visión):</label>
+        <InputFile OnChange="CargarImagen" accept="image/*" class="form-control" />
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(errorMensaje))
+{
+    <div class="alert alert-danger">@errorMensaje</div>
+}
+
+<div class="border rounded p-3 mb-3 bg-light" style="min-height: 340px; max-height: 520px; overflow-y: auto;">
+    @if (historial.Count == 0)
+    {
+        <div class="text-muted text-center mt-5">
+            Escribe una pregunta abajo para consultar tu base de conocimiento documental.
+        </div>
+    }
+    @foreach (var item in historial)
+    {
+        <div class="mb-3 p-2 rounded @(item.Autor == "Usuario" ? "bg-white border" : "bg-primary-subtle")">
+            <strong>@item.Autor:</strong>
+            <div style="white-space: pre-wrap;">@item.Texto</div>
+        </div>
+    }
+</div>
+
+<div class="input-group">
+    <input class="form-control" @bind="pregunta" @bind:event="oninput" @onkeyup="ManejarEnter"
+           placeholder="Escribe tu consulta sobre los documentos..." disabled="@generando" />
+    @if (!generando)
+    {
+        <button class="btn btn-primary" @onclick="Enviar">Enviar</button>
+    }
+    else
+    {
+        <button class="btn btn-danger" @onclick="Cancelar">Detener</button>
+    }
+</div>
+
+@code {
+    private List<string> modelos = [];
+    private string modeloSeleccionado = "qwen3:8b";
+    private string pregunta = "";
+    private string? imagenBase64;
+    private string errorMensaje = "";
+    private bool generando = false;
+    private CancellationTokenSource? cts;
+    private List<(string Autor, string Texto)> historial = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            modelos = await ModeloService.ObtenerModelosLocalesAsync();
+            if (modelos.Any(m => m.Contains("qwen3")))
+                modeloSeleccionado = modelos.First(m => m.Contains("qwen3"));
+            else if (modelos.Count > 0)
+                modeloSeleccionado = modelos[0];
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"No se pudo conectar con Ollama en localhost:11434. Verifica que esté ejecutándose. ({ex.Message})";
+        }
+    }
+
+    private async Task CargarImagen(InputFileChangeEventArgs e)
+    {
+        using var ms = new MemoryStream();
+        await e.File.OpenReadStream(500_000_000).CopyToAsync(ms);
+        imagenBase64 = Convert.ToBase64String(ms.ToArray());
+    }
+
+    private async Task Enviar()
+    {
+        if (string.IsNullOrWhiteSpace(pregunta) || generando) return;
+
+        errorMensaje = "";
+        var textoPregunta = pregunta;
+        pregunta = "";
+        generando = true;
+        cts = new CancellationTokenSource();
+
+        historial.Add(("Usuario", textoPregunta));
+        historial.Add(("Asistente IA", ""));
+        int idx = historial.Count - 1;
+
+        try
+        {
+            await foreach (var token in RagService.ConsultarRagStreamingAsync(
+                textoPregunta, modeloSeleccionado, imagenBase64, cts.Token))
+            {
+                historial[idx] = ("Asistente IA", historial[idx].Texto + token);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            historial[idx] = ("Asistente IA", historial[idx].Texto + " [Generación detenida]");
+        }
+        catch (Exception ex)
+        {
+            errorMensaje = $"Error durante la consulta: {ex.Message}";
+        }
+        finally
+        {
+            imagenBase64 = null;
+            generando = false;
+        }
+    }
+
+    private async Task ManejarEnter(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Enviar();
+    }
+
+    private void Cancelar() => cts?.Cancel();
+    public void Dispose() => cts?.Cancel();
+}
