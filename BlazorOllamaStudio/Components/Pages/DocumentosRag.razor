@@ -78,7 +78,7 @@
                 estado = $"Extrayendo estructura y vectorizando '{file.Name}'...";
                 await InvokeAsync(StateHasChanged);
 
-                await using var stream = file.OpenReadStream(maxAllowedSize: 30_000_000);
+                await using var stream = file.OpenReadStream(maxAllowedSize: 500_000_000);
                 await DocService.IndexarDocumentoAsync(file.Name, stream);
             }
             estado = "Indexación completada correctamente en SQL Server LocalDB.";
